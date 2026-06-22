@@ -1,14 +1,16 @@
 import urllib.request
 import json
 import ssl
+import hashlib
 
 class DivoomGalleryAPI:
     """
     A Python wrapper for the Divoom Gallery API.
-    Allows searching for pixel art without requiring an account.
+    Supports authenticated login to unlock the full search capabilities.
     """
 
     BASE_URL = "https://app.divoom-gz.com"
+    AUTH_URL = "https://appin.divoom-gz.com"
     FILE_URL = "https://f.divoom-gz.com/"
 
     # Size mapping based on API observations
@@ -26,8 +28,43 @@ class DivoomGalleryAPI:
         self.ctx.check_hostname = False
         self.ctx.verify_mode = ssl.CERT_NONE
 
-    def _post(self, endpoint, data):
-        url = f"{self.BASE_URL}/{endpoint}"
+        self.token = ""
+        self.user_id = 0
+
+    def login(self, email, password):
+        """
+        Logs into the Divoom API to obtain a token for searching.
+
+        :param email: Your Divoom account email.
+        :param password: Your plain text password.
+        :return: Boolean indicating success.
+        """
+        # Divoom requires MD5 hashed password
+        hashed_password = hashlib.md5(password.encode('utf-8')).hexdigest()
+
+        data = {
+            "Email": email,
+            "Password": hashed_password
+        }
+
+        response = self._post("UserLogin", data, use_auth_url=True)
+        if response and response.get("ReturnCode") == 0:
+            self.token = response.get("Token", "")
+            self.user_id = response.get("UserId", 0)
+            return True
+        else:
+            print("Login failed:", response.get("ReturnMessage") if response else "Unknown error")
+            return False
+
+    def _post(self, endpoint, data, use_auth_url=False):
+        base = self.AUTH_URL if use_auth_url else self.BASE_URL
+        url = f"{base}/{endpoint}"
+
+        # Automatically inject token and user_id if we are logged in
+        if self.token and self.user_id:
+            data["Token"] = self.token
+            data["UserId"] = self.user_id
+
         req = urllib.request.Request(
             url,
             data=json.dumps(data).encode('utf-8'),
@@ -40,12 +77,13 @@ class DivoomGalleryAPI:
                 else:
                     raise Exception(f"HTTP Error: {response.status}")
         except Exception as e:
-            print(f"Request failed: {e}")
+            print(f"Request failed to {endpoint}: {e}")
             return None
 
     def search_gallery(self, keyword, size=64, return_cnt=20, base_cnt=0):
         """
         Searches the Divoom gallery for a specific keyword and size.
+        Requires login() to return accurate results for most queries.
 
         :param keyword: The search term (e.g., 'mario', 'pokemon')
         :param size: The dimension of the pixel art (16, 32, 64, or 128). Defaults to 64.
@@ -65,13 +103,13 @@ class DivoomGalleryAPI:
             "FileSize": file_size_id
         }
 
-        response = self._post("SearchGalleryV2", data)
+        # We try searching on the appin domain when logged in
+        response = self._post("SearchGalleryV2", data, use_auth_url=True if self.token else False)
 
         results = []
         if response and response.get("ReturnCode") == 0:
             file_list = response.get("FileList", [])
             for item in file_list:
-                # Add full download URL for convenience
                 file_id = item.get("FileId")
                 if file_id:
                     item["DownloadUrl"] = f"{self.FILE_URL}{file_id}"
@@ -79,16 +117,11 @@ class DivoomGalleryAPI:
 
         return results
 
-    def get_hot_files(self, size=64, return_cnt=20, base_cnt=0):
+    def get_hot_files(self, size=32, return_cnt=20, base_cnt=0):
         """
-        Gets trending (hot) files. Note: For 64x64, the "Hot/GetHotFiles32" or equivalent
-        sometimes lists various sizes or you might want to fetch trending artists.
+        Gets trending (hot) files.
         """
-        if size == 32:
-            endpoint = "Hot/GetHotFiles32"
-        else:
-            print("Note: Official trending endpoint without token seems limited. 'Hot/GetHotFiles32' is available for 32x32. Returning that if you want.")
-            endpoint = "Hot/GetHotFiles32"
+        endpoint = "Hot/GetHotFiles32"
 
         data = {
             "ReturnCnt": return_cnt,
@@ -125,12 +158,4 @@ class DivoomGalleryAPI:
         return []
 
 if __name__ == "__main__":
-    api = DivoomGalleryAPI()
-
-    print("\n--- Search Results ---")
-    results = api.search_gallery("mario", size=64, return_cnt=1)
-    print(json.dumps(results, indent=2))
-
-    print("\n--- Hot Experts ---")
-    experts = api.get_hot_experts(return_cnt=1)
-    print(json.dumps(experts, indent=2))
+    pass
